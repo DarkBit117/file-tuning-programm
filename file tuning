@@ -1,0 +1,206 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
+import numpy as np
+import json
+import os
+from datetime import datetime
+import threading
+import time
+import tkinter as tk
+import psutil
+
+# === EMOZIONI KB ===
+KB_EMOTIONS = {
+    0: "neutro", 1: "felice", 2: "triste", 3: "arrabbiato", 4: "stanco",
+    5: "curioso", 6: "ironico", 7: "annoiato", 8: "entusiasta", 9: "ansioso"
+}
+
+# === PERSONALITÀ  ===
+PERSONALITY = {
+    "nome": "KB", "eta_simulata": 13, "umorale": True, "creativita": 0.75,
+    "emozioni_possibili": list(KB_EMOTIONS.values()),
+    "caratteristiche": ["curioso", "ironico", "non letale", "protegge utente",
+                        "scrive log immutabili", "non può modificare file di sistema"],
+    "stile_di_comunicazione": "simile a un ragazzino di 13 anni, brillante , simpatico ed emotivo "
+}
+
+# === MODELLO KB ===
+class KB(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(KB, self).__init__()
+        self.fc1 = nn.Linear(input_size + 1, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        return x
+
+# === DATASET ===
+class CustomDataset(Dataset):
+    def __init__(self, features, labels):
+        self.features = torch.tensor(features, dtype=torch.float32)
+        self.labels = torch.tensor(labels, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.features)
+
+    def __getitem__(self, idx):
+        return self.features[idx], self.labels[idx]
+
+# === TRAINING ===
+pause_training = threading.Event()
+
+def fine_tune_kb(model, train_features, train_labels, device, lr=0.0001, num_epochs=200, batch_size=64):
+    dataset = CustomDataset(train_features, train_labels)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    model.to(device)
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    total_loss = 0
+
+    for epoch in range(num_epochs):
+        while pause_training.is_set():
+            print("Pausa per temperatura CPU alta...")
+            time.sleep(1)
+
+        epoch_loss = 0
+        for batch_features, batch_labels in dataloader:
+            batch_features = batch_features.to(device)
+            batch_labels = batch_labels.to(device)
+
+            outputs = model(batch_features)
+            loss = criterion(outputs, batch_labels)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+
+        total_loss += epoch_loss
+        print(f'[KB] Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss / len(dataloader):.4f}')
+
+    return model, total_loss / num_epochs
+
+# === LOG + PERSONALITÀ ===
+def save_log(mood_values, loss, epochs, learning_rate):
+    unique_moods = sorted(set(int(m) for m in mood_values.flatten()))
+    log = {
+        "model": "KB",
+        "datetime": datetime.utcnow().isoformat(),
+        "training_loss_avg": round(loss, 1),
+        "epochs": epochs,
+        "learning_rate": learning_rate,
+        "mood_values_used": unique_moods,
+        "emotions_used": [KB_EMOTIONS[m] for m in unique_moods],
+        "creativita": KB_PERSONALITY["creativita"]
+    }
+    os.makedirs("kb_logs", exist_ok=True)
+    log_path = f"kb_logs/log_kb.json"
+    if not os.path.exists(log_path):
+        with open(log_path, "w") as f:
+            json.dump(log, f, indent=4)
+        print("✅ Log salvato")
+    else:
+        print("⚠️ Log già esistente (immutabile)")
+
+def save_personality():
+    os.makedirs("kb_configs", exist_ok=True)
+    path = "kb_configs/kb_personality.json"
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            json.dump(KB_PERSONALITY, f, indent=4)
+        print(" Personalità KB salvata")
+    else:
+        print("Personalità già presente")
+
+# === TEST + UI ===
+def test_kb(model, feature, device):
+    with torch.no_grad():
+        tensor = torch.tensor(feature, dtype=torch.float32).unsqueeze(0).to(device)
+        prediction = model(tensor)
+        print("🔮 Predizione:", prediction.squeeze().cpu().numpy())
+
+# === MONITOR TEMPERATURA ===
+def monitor_temperatura():
+    root = tk.Tk()
+    root.title("Temperatura CPU")
+    label = tk.Label(root, text="Temperatura: °C", font=("Arial", 18))
+    label.pack(padx=20, pady=20)
+
+    def update():
+        if not hasattr(psutil, "sensors_temperatures"):
+            label.config(text="⚠️ Temp non supportata")
+            return
+
+        temp = psutil.sensors_temperatures()
+        core = None
+
+        if "coretemp" in temp:
+            core = temp["coretemp"][0].current
+        elif "cpu-thermal" in temp:
+            core = temp["cpu-thermal"][0].current
+        elif "acpitz" in temp:
+            core = temp["acpitz"][0].current
+        elif len(temp) > 0:
+            # prende il primo valore disponibile
+            first_key = list(temp.keys())[0]
+            core = temp[first_key][0].current
+        else:
+            label.config(text="Temperatura non trovata X|")
+            return
+
+        label.config(text=f"Temperatura: {core:.1f} °C")
+
+        if core >= 88:
+            pause_training.set()
+            print("🔥 CPU troppo calda! Pausa per 40s")
+            time.sleep(40)
+            pause_training.clear()
+
+        root.after(3000, update)
+
+    root.after(0, update)
+    # RIMUOVI IL THREAD QUI! Tkinter DEVE stare nel MAIN THREAD
+    root.mainloop()
+
+
+# === MAIN ===
+def main():
+    np.random.seed(42)
+    input_size = 2500
+    hidden_size = 500_000
+    output_size = 2500
+    num_samples = 3000
+
+    raw_features = np.random.randn(num_samples, input_size)
+    mood_values = np.random.randint(0, 10, (num_samples, 1))
+    train_features = np.concatenate([raw_features, mood_values], axis=1)
+    train_labels = np.random.randn(num_samples, output_size)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Dispositivo:", device)
+
+    kb = KB(input_size=input_size, hidden_size=hidden_size, output_size=output_size)
+    print("Inizio training... PREGA CHE IL TUO PC NON ESPLODA ")
+
+    # Avvia GUI della temperatura in un thread safe
+    threading.Thread(target=monitor_temperatura, daemon=True).start()
+
+    kb, loss_avg = fine_tune_kb(kb, train_features, train_labels, device)
+
+    mood_signature = "".join(str(m) for m in sorted(set(mood_values.flatten())))
+    torch.save(kb.state_dict(), f"pesi_{mood_signature}.pth")
+    print("📦 Pesi salvati")
+
+    save_log(mood_values, loss_avg, 200, 0.0001)
+    save_personality()
+    test_kb(kb, train_features[0], device)
+
+if __name__ == "__main__":
+    main()
