@@ -1,3 +1,1 @@
-#this programm is a python programm mede out for train a model 
-#you can decide how much inputs and samples it can have 
-#and all this is super easy to configure with the super user friendly graphics interface 
+#this programm is a python programm mede out for train a model it will find with cuda all devices and if you have a gpu it will train the model modelon it menwhile the cpu is gonna load and  create the data , if you have only a cpu on the computer this programm will work but you have to hope that your computer will not explode ;) 
